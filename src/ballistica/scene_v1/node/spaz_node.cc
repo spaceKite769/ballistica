@@ -1532,13 +1532,15 @@ void SpazNode::Throw(bool with_bomb_button) {
     throw_start_ = scene()->time();
     have_thrown_ = true;
 
-    if (SceneSound* sound = GetRandomMedia(attack_sounds_)) {
-      if (auto* s = g_base->audio->SourceBeginNew()) {
-        const dReal* p = dGeomGetPosition(body_head_->geom());
-        g_base->audio->PushSourceStopSoundCall(voice_play_id_);
-        s->SetPosition(p[0], p[1], p[2]);
-        voice_play_id_ = s->Play(sound->GetSoundData());
-        s->End();
+    if (!frozen_) {
+      if (SceneSound* sound = GetRandomMedia(attack_sounds_)) {
+        if (auto* s = g_base->audio->SourceBeginNew()) {
+          const dReal* p = dGeomGetPosition(body_head_->geom());
+          g_base->audio->PushSourceStopSoundCall(voice_play_id_);
+          s->SetPosition(p[0], p[1], p[2]);
+          voice_play_id_ = s->Play(sound->GetSoundData());
+          s->End();
+        }
       }
     }
 
@@ -1581,7 +1583,7 @@ void SpazNode::HandleMessage(const char* data_in) {
   NodeMessageType type = extract_node_message_type(&data);
   switch (type) {
     case NodeMessageType::kScreamSound: {
-      if (dead_ || invincible_) break;
+      if (dead_ || invincible_ || frozen_) break;
       force_scream_ = true;
       last_force_scream_time_ = scene()->time();
       break;
@@ -3713,10 +3715,11 @@ void SpazNode::Step() {
                           + p_head_vel[2] * p_head_vel[2];
 
   float scream_speed = can_fly_ ? 160.0f : 100.0f;
-  if ((force_scream_ && scene()->time() - last_force_scream_time_ < 3000)
-      || (scene()->time() - last_fly_time_ > 1000
-          && vel_mag_squared > scream_speed && !footing_
-          && std::abs(p_head_vel[1]) > 0.3f && !dead_)) {
+  if (!frozen_
+      && ((force_scream_ && scene()->time() - last_force_scream_time_ < 3000)
+          || (scene()->time() - last_fly_time_ > 1000
+              && vel_mag_squared > scream_speed && !footing_
+              && std::abs(p_head_vel[1]) > 0.3f && !dead_))) {
     if (scene()->time() - last_fall_time_ > 1000) {
       // If we're not still screaming, start one up.
       if (!(voice_play_id_ == fall_play_id_
@@ -3738,7 +3741,8 @@ void SpazNode::Step() {
   // If theres a scream going on, update its position and stop it if we've
   // slowed down alot.
   if (voice_play_id_ == fall_play_id_) {
-    if ((footing_ && !force_scream_)
+    if (frozen_
+        || (footing_ && !force_scream_)
         || (force_scream_
             && scene()->time() - last_force_scream_time_ > 2000)) {
       g_base->audio->PushSourceStopSoundCall(voice_play_id_);
@@ -6229,6 +6233,15 @@ void SpazNode::SetFrozen(bool val) {
   // Hmm; dont remember why this is necessary.
   if (!frozen_) {
     dBodyEnable(body_head_->body());
+  } else {
+    if (voice_play_id_ != 0xFFFFFFFF) {
+      g_base->audio->PushSourceStopSoundCall(voice_play_id_);
+      voice_play_id_ = 0xFFFFFFFF;
+    }
+    if (tick_play_id_ != 0xFFFFFFFF) {
+      g_base->audio->PushSourceStopSoundCall(tick_play_id_);
+      tick_play_id_ = 0xFFFFFFFF;
+    }
   }
 
   // Mark the time when we're newly frozen. We don't shatter based on
@@ -6264,7 +6277,7 @@ void SpazNode::SetCurseDeathTime(millisecs_t val) {
   curse_death_time_ = val;
 
   // Start ticking sound.
-  if (curse_death_time_ != 0) {
+  if (curse_death_time_ != 0 && !frozen_) {
     if (tick_play_id_ == 0xFFFFFFFF) {
       base::AudioSource* s = g_base->audio->SourceBeginNew();
       if (s) {
@@ -6393,8 +6406,8 @@ void SpazNode::SetDead(bool val) {
         || !g_base->audio->IsSoundPlaying(fall_play_id_)) {
       g_base->audio->PushSourceStopSoundCall(voice_play_id_);
 
-      // Only make sound if we're not shattered.
-      if (!shattered_) {
+      // Only make sound if we're not shattered or frozen.
+      if (!shattered_ && !frozen_) {
         if (SceneSound* sound = GetRandomMedia(death_sounds_)) {
           if (base::AudioSource* source = g_base->audio->SourceBeginNew()) {
             const dReal* p_head = dGeomGetPosition(body_head_->geom());
@@ -6779,13 +6792,15 @@ void SpazNode::SetHoldNode(Node* val) {
 
     assert(a && b);
     {
-      g_base->audio->PushSourceStopSoundCall(voice_play_id_);
-      if (SceneSound* sound = GetRandomMedia(pickup_sounds_)) {
-        if (auto* source = g_base->audio->SourceBeginNew()) {
-          const dReal* p_head = dGeomGetPosition(body_head_->geom());
-          source->SetPosition(p_head[0], p_head[1], p_head[2]);
-          voice_play_id_ = source->Play(sound->GetSoundData());
-          source->End();
+      if (!frozen_) {
+        g_base->audio->PushSourceStopSoundCall(voice_play_id_);
+        if (SceneSound* sound = GetRandomMedia(pickup_sounds_)) {
+          if (auto* source = g_base->audio->SourceBeginNew()) {
+            const dReal* p_head = dGeomGetPosition(body_head_->geom());
+            source->SetPosition(p_head[0], p_head[1], p_head[2]);
+            voice_play_id_ = source->Play(sound->GetSoundData());
+            source->End();
+          }
         }
       }
 
@@ -6930,7 +6945,7 @@ void SpazNode::ApplyResyncData(const std::vector<uint8_t>& data) {
 }
 
 void SpazNode::PlayHurtSound() {
-  if (dead_ || invincible_) {
+  if (dead_ || invincible_ || frozen_) {
     return;
   }
   if (SceneSound* sound = GetRandomMedia(impact_sounds_)) {

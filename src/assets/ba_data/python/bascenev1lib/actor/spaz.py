@@ -447,7 +447,7 @@ class Spaz(bs.Actor):
 
     def _safe_play_sound(self, sound: bs.Sound, volume: float) -> None:
         """Plays a sound at our position if we exist."""
-        if self.node:
+        if self.node and not self.frozen:
             sound.play(volume, self.node.position)
 
     def on_punch_release(self) -> None:
@@ -676,7 +676,8 @@ class Spaz(bs.Actor):
 
         if isinstance(msg, bs.PickedUpMessage):
             if self.node:
-                self.node.handlemessage('hurt_sound')
+                if not self.frozen:
+                    self.node.handlemessage('hurt_sound')
                 self.node.handlemessage('picked_up')
 
             # This counts as a hit.
@@ -939,10 +940,11 @@ class Spaz(bs.Actor):
                     # FIXME: Transition out perhaps?
                     self.shield.delete()
                     self.shield = None
-                    SpazFactory.get().shield_down_sound.play(
-                        1.0,
-                        position=self.node.position,
-                    )
+                    if not self.frozen:
+                        SpazFactory.get().shield_down_sound.play(
+                            1.0,
+                            position=self.node.position,
+                        )
 
                     # Emit some cool looking sparks when the shield dies.
                     npos = self.node.position
@@ -955,7 +957,7 @@ class Spaz(bs.Actor):
                         chunk_type='spark',
                     )
 
-                else:
+                elif not self.frozen:
                     SpazFactory.get().shield_hit_sound.play(
                         0.5,
                         position=self.node.position,
@@ -1015,10 +1017,11 @@ class Spaz(bs.Actor):
                 )
 
                 damage = int(damage_scale * self.node.damage)
-            self.node.handlemessage('hurt_sound')
+            if not self.frozen:
+                self.node.handlemessage('hurt_sound')
 
             # Play punch impact sound based on damage if it was a punch.
-            if msg.hit_type == 'punch':
+            if msg.hit_type == 'punch' and not self.frozen:
                 self.on_punched(damage)
 
                 # If damage was significant, lets show it.
@@ -1178,14 +1181,21 @@ class Spaz(bs.Actor):
             elif self.node:
                 if not wasdead:
                     self.node.hurt = 1.0
-                    if self.play_big_death_sound:
+                    if self.play_big_death_sound and not self.frozen:
                         SpazFactory.get().single_player_death_sound.play()
-                    self.node.dead = True
+                    if not self.frozen:
+                        self.node.dead = True
                     bs.timer(2.0, self.node.delete)
 
         elif isinstance(msg, bs.OutOfBoundsMessage):
-            # By default we just die here.
-            self.handlemessage(bs.DieMessage(how=bs.DeathType.FALL))
+            # Frozen spaz fall off silently (no death/fall sounds).
+            if self.frozen:
+                self._dead = True
+                self.hitpoints = 0
+                if self.node:
+                    self.node.delete()
+            else:
+                self.handlemessage(bs.DieMessage(how=bs.DeathType.FALL))
 
         elif isinstance(msg, bs.StandMessage):
             self._last_stand_pos = (
@@ -1231,7 +1241,7 @@ class Spaz(bs.Actor):
 
                 # If its something besides another spaz, just do a muffled
                 # punch sound.
-                if node.getnodetype() != 'spaz':
+                if node.getnodetype() != 'spaz' and not self.frozen:
                     sounds = SpazFactory.get().impact_sounds_medium
                     sound = sounds[random.randrange(len(sounds))]
                     sound.play(1.0, position=self.node.position)
@@ -1461,7 +1471,7 @@ class Spaz(bs.Actor):
         self.node.shattered = 2 if extreme else 1
 
     def _hit_self(self, intensity: float) -> None:
-        if not self.node:
+        if not self.node or self.frozen:
             return
         pos = self.node.position
         self.handlemessage(
